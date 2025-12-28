@@ -1,62 +1,37 @@
 #include <Arduino.h>
 #include <Wire.h>
-#include <Adafruit_GFX.h>
-#include <Adafruit_SSD1306.h>
+#include <Adafruit_SHT31.h>
 
-static const int SCREEN_WIDTH = 128;
-static const int SCREEN_HEIGHT = 64;
-
-// Most 0.96" SSD1306 I2C OLEDs are 0x3C (yours scanned as 0x3C)
-static const uint8_t OLED_ADDR = 0x3C;
-
-// No reset pin used for many I2C modules (-1 means "not connected")
-Adafruit_SSD1306 display(SCREEN_WIDTH, SCREEN_HEIGHT, &Wire, -1);
+Adafruit_SHT31 sht31 = Adafruit_SHT31();
 
 void setup() {
   Serial.begin(115200);
   delay(200);
 
-  // Explicit I2C pins for ESP32 (matches your wiring)
-  Wire.begin(21, 22);
+  Wire.begin(21, 22); // SDA, SCL
 
-  if (!display.begin(SSD1306_SWITCHCAPVCC, OLED_ADDR)) {
-    Serial.println("ERROR: SSD1306 init failed. Check wiring + address.");
+  if (!sht31.begin(0x44)) { // most common address
+    Serial.println("ERROR: SHT31 not found at 0x44.");
+    Serial.println("Tip: Run I2C scanner and check address (0x44 or 0x45).");
     while (true) { delay(1000); }
   }
 
-  display.clearDisplay();
-  display.setTextSize(2);
-  display.setTextColor(SSD1306_WHITE);
-  display.setCursor(0, 0);
-  display.println("HELLO!");
-  display.setTextSize(1);
-  display.println();
-  display.println("ESP32 + OLED");
-  display.display();
-
-  Serial.println("OLED initialized and wrote HELLO!");
+  Serial.println("SHT31 initialized.");
 }
 
 void loop() {
-  static uint32_t last = 0;
-  static int counter = 0;
+  float t = sht31.readTemperature();
+  float h = sht31.readHumidity();
 
-  if (millis() - last >= 1000) {
-    last = millis();
-    counter++;
-
-    display.clearDisplay();
-    display.setTextSize(2);
-    display.setTextColor(SSD1306_WHITE);
-    display.setCursor(0, 0);
-    display.println("HELLO!");
-    display.setTextSize(1);
-    display.println();
-    display.print("Count: ");
-    display.println(counter);
-    display.display();
-
-    Serial.print("Count: ");
-    Serial.println(counter);
+  if (isnan(t) || isnan(h)) {
+    Serial.println("Failed to read SHT31.");
+  } else {
+    Serial.print("Temp: ");
+    Serial.print(t);
+    Serial.print(" C,  Humidity: ");
+    Serial.print(h);
+    Serial.println(" %");
   }
+
+  delay(1000);
 }
