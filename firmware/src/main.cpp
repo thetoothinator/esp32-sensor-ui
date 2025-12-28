@@ -5,8 +5,8 @@
 #include <Adafruit_SHT31.h>
 
 // ---------- Pins ----------
-static const int PIN_BTN_NEXT = 32;   // Button 1
-static const int PIN_BTN_TOGGLE = 33; // Button 2
+static const int PIN_BTN_NEXT = 32; // Button 1
+static const int PIN_BTN_PREV = 33; // Button 2
 
 // ---------- I2C ----------
 static const int I2C_SDA = 21;
@@ -27,6 +27,7 @@ enum Screen {
   SCREEN_TEMP_HUM = 0,
   SCREEN_TEMP_ONLY = 1,
   SCREEN_HUM_ONLY  = 2,
+  SCREEN_MINMAX    = 3,
   SCREEN_COUNT
 };
 
@@ -41,19 +42,34 @@ static uint32_t lastSensorMs = 0;
 static float tempC = NAN;
 static float humPct = NAN;
 
-// ---------- Simple debounce ----------
-struct DebouncedButton {
+// ---------- Min/Max tracking ----------
+static bool haveMinMax = false;
+static float minTempC = NAN, maxTempC = NAN;
+static float minHum = NAN,   maxHum = NAN;
+
+float toF(float c) { return c * 9.0f / 5.0f + 32.0f; }
+
+// ---------- Debounced + long-press buttons ----------
+struct Button {
   int pin;
-  bool lastStable;          // last stable reading (HIGH/LOW)
-  bool lastReading;         // most recent raw reading
-  uint32_t lastChangeMs;    // when raw reading last changed
+  bool stable;           // stable state (HIGH/LOW)
+  bool lastReading;      // last raw read
+  uint32_t lastChangeMs; // raw change time
+
+  bool pressed;          // currently pressed?
+  uint32_t pressStartMs; // when press started
+  bool longFired;        // long press already triggered?
 };
 
 static const uint32_t DEBOUNCE_MS = 35;
-DebouncedButton btnNext { PIN_BTN_NEXT, HIGH, HIGH, 0 };
-DebouncedButton btnToggle { PIN_BTN_TOGGLE, HIGH, HIGH, 0 };
+static const uint32_t LONGPRESS_MS = 700;
 
-bool updateButtonPressed(DebouncedButton &b) {
+Button btnNext { PIN_BTN_NEXT, HIGH, HIGH, 0, false, 0, false };
+Button btnPrev { PIN_BTN_PREV, HIGH, HIGH, 0, false, 0, false };
+
+enum ButtonEvent { NONE, SHORT_PRESS, LONG_PRESS };
+
+ButtonEvent updateButton(Button &b) {
   bool reading = digitalRead(b.pin);
 
   if (reading != b.lastReading) {
@@ -61,38 +77,69 @@ bool updateButtonPressed(DebouncedButton &b) {
     b.lastChangeMs = millis();
   }
 
-  // If the reading has been stable long enough, accept it
+  // Accept new stable state after debounce
   if ((millis() - b.lastChangeMs) > DEBOUNCE_MS) {
-    if (reading != b.lastStable) {
-      b.lastStable = reading;
+    if (reading != b.stable) {
+      b.stable = reading;
 
-      // We consider a "press" when it becomes LOW (because of pull-up)
-      if (b.lastStable == LOW) {
-        return true;
+      if (b.stable == LOW) { // became pressed
+        b.pressed = true;
+        b.pressStartMs = millis();
+        b.longFired = false;
+      } else { // became released
+        bool wasPressed = b.pressed;
+        b.pressed = false;
+
+        if (wasPressed && !b.longFired) {
+          return SHORT_PRESS;
+        }
       }
     }
   }
 
-  return false;
+  // Long press detection while held
+  if (b.pressed && !b.longFired) {
+    if (millis() - b.pressStartMs >= LONGPRESS_MS) {
+      b.longFired = true;
+      return LONG_PRESS;
+    }
+  }
+
+  return NONE;
 }
 
-float toF(float c) { return c * 9.0f / 5.0f + 32.0f; }
+void updateMinMax(float tC, float h) {
+  if (!haveMinMax) {
+    haveMinMax = true;
+    minTempC = maxTempC = tC;
+    minHum   = maxHum   = h;
+    return;
+  }
 
-void drawScreen() {
-  display.clearDisplay();
+  if (tC < minTempC) minTempC = tC;
+  if (tC > maxTempC) maxTempC = tC;
+  if (h  < minHum)   minHum   = h;
+  if (h  > maxHum)   maxHum   = h;
+}
+
+void drawHeader() {
+  display.setTextSize(1);
   display.setTextColor(SSD1306_WHITE);
   display.setCursor(0, 0);
 
-  // Header line
-  display.setTextSize(1);
-  display.print("Screen ");
+  display.print("Scr ");
   display.print((int)currentScreen + 1);
   display.print("/");
   display.print((int)SCREEN_COUNT);
-  display.print("  Units: ");
+  display.print("  ");
   display.println(useFahrenheit ? "F" : "C");
 
   display.println("----------------");
+}
+
+void drawScreen() {
+  display.clearDisplay();
+  drawHeader();
 
   if (isnan(tempC) || isnan(humPct)) {
     display.setTextSize(2);
@@ -103,39 +150,73 @@ void drawScreen() {
     return;
   }
 
-  float tempToShow = useFahrenheit ? toF(tempC) : tempC;
+  float tShow = useFahrenheit ? toF(tempC) : tempC;
 
   if (currentScreen == SCREEN_TEMP_HUM) {
     display.setTextSize(2);
-    display.print(tempToShow, 1);
+    display.print(tShow, 1);
     display.print(useFahrenheit ? "F" : "C");
     display.println();
 
-    display.setTextSize(2);
     display.print(humPct, 1);
     display.println("%");
-  }
-  else if (currentScreen == SCREEN_TEMP_ONLY) {
+  } else if (currentScreen == SCREEN_TEMP_ONLY) {
     display.setTextSize(3);
-    display.print(tempToShow, 1);
+    display.print(tShow, 1);
     display.print(useFahrenheit ? "F" : "C");
-  }
-  else if (currentScreen == SCREEN_HUM_ONLY) {
+  } else if (currentScreen == SCREEN_HUM_ONLY) {
     display.setTextSize(3);
     display.print(humPct, 1);
     display.print("%");
+  } else if (currentScreen == SCREEN_MINMAX) {
+    display.setTextSize(1);
+    display.println("Min/Max since boot:");
+
+    float minT = useFahrenheit ? toF(minTempC) : minTempC;
+    float maxT = useFahrenheit ? toF(maxTempC) : maxTempC;
+
+    display.print("T min: ");
+    display.print(minT, 1);
+    display.print(useFahrenheit ? "F" : "C");
+    display.print("  max: ");
+    display.print(maxT, 1);
+    display.println(useFahrenheit ? "F" : "C");
+
+    display.print("H min: ");
+    display.print(minHum, 1);
+    display.print("%");
+    display.print("   max: ");
+    display.print(maxHum, 1);
+    display.println("%");
+
+    display.println();
+    display.println("Hold btn: toggle C/F");
   }
 
   display.display();
+}
+
+void nextScreen() {
+  currentScreen = (Screen)((currentScreen + 1) % SCREEN_COUNT);
+  drawScreen();
+}
+
+void prevScreen() {
+  currentScreen = (Screen)((currentScreen + SCREEN_COUNT - 1) % SCREEN_COUNT);
+  drawScreen();
+}
+
+void toggleUnits() {
+  useFahrenheit = !useFahrenheit;
+  drawScreen();
 }
 
 void setup() {
   Serial.begin(115200);
   delay(200);
 
-  // Buttons: internal pull-ups, press connects pin to GND (LOW)
   pinMode(PIN_BTN_NEXT, INPUT_PULLUP);
-  pinMode(PIN_BTN_TOGGLE, INPUT_PULLUP);
+  pinMode(PIN_BTN_PREV, INPUT_PULLUP);
 
   Wire.begin(I2C_SDA, I2C_SCL);
 
@@ -143,9 +224,8 @@ void setup() {
     Serial.println("ERROR: OLED init failed.");
     while (true) delay(1000);
   }
-
   if (!sht31.begin(SHT31_ADDR)) {
-    Serial.println("ERROR: SHT31 init failed (check address/wiring).");
+    Serial.println("ERROR: SHT31 init failed.");
     while (true) delay(1000);
   }
 
@@ -153,39 +233,43 @@ void setup() {
   display.setTextSize(1);
   display.setTextColor(SSD1306_WHITE);
   display.setCursor(0, 0);
-  display.println("Ready.");
-  display.println("BTN32: Next screen");
-  display.println("BTN33: Toggle C/F");
+  display.println("Ready!");
+  display.println("BTN32: next");
+  display.println("BTN33: prev");
+  display.println("Hold: toggle C/F");
   display.display();
 
-  Serial.println("Ready. BTN32 next screen, BTN33 toggle C/F.");
+  Serial.println("Ready: BTN32 next, BTN33 prev, hold toggles C/F.");
 }
 
 void loop() {
-  // ---- Read buttons (debounced) ----
-  if (updateButtonPressed(btnNext)) {
-    currentScreen = (Screen)((currentScreen + 1) % SCREEN_COUNT);
-    drawScreen(); // instant feedback
-  }
+  // --- Buttons ---
+  ButtonEvent e1 = updateButton(btnNext);
+  ButtonEvent e2 = updateButton(btnPrev);
 
-  if (updateButtonPressed(btnToggle)) {
-    useFahrenheit = !useFahrenheit;
-    drawScreen(); // instant feedback
-  }
+  if (e1 == SHORT_PRESS) nextScreen();
+  if (e2 == SHORT_PRESS) prevScreen();
 
-  // ---- Update sensor on a schedule (non-blocking) ----
+  if (e1 == LONG_PRESS || e2 == LONG_PRESS) toggleUnits();
+
+  // --- Sensor update (1 Hz) ---
   uint32_t now = millis();
   if (now - lastSensorMs >= SENSOR_PERIOD_MS) {
     lastSensorMs = now;
 
-    tempC = sht31.readTemperature();
-    humPct = sht31.readHumidity();
+    float t = sht31.readTemperature();
+    float h = sht31.readHumidity();
 
-    if (!isnan(tempC) && !isnan(humPct)) {
-      Serial.print("TempC=");
-      Serial.print(tempC, 2);
-      Serial.print("  Hum=");
-      Serial.println(humPct, 2);
+    if (!isnan(t) && !isnan(h)) {
+      tempC = t;
+      humPct = h;
+      updateMinMax(t, h);
+
+      Serial.print("T=");
+      Serial.print(t, 2);
+      Serial.print("C  H=");
+      Serial.print(h, 2);
+      Serial.println("%");
     } else {
       Serial.println("SHT31 read failed.");
     }
