@@ -2,9 +2,8 @@
 
 An embedded "sensor UI" on an ESP32 that reads temperature and humidity from an SHT31 over I<sup>2</sup>C and displays live data on a .96" SSD1306 OLED. Two pushbuttons provide a simple user interface with screen navigation and long-press actions, including a Min/Max screen.
 
-## Demo
-- ![Demo photo](docs/demo.jpg)
-- [Demo video (MP4)](docs/demo.mp4)
+## Demo (Click the image to watch the demo)
+[![ESP32 Sensor UI demo video](./docs/demo.jpg)](https://www.youtube.com/watch?v=t4kKeUxgJoU)
 
 ## Features
 - SHT31 temperature and humidity sensor over **I<sup>2</sup>C**
@@ -31,7 +30,7 @@ An embedded "sensor UI" on an ESP32 that reads temperature and humidity from an 
 
 ### Power (3.3V)
 | Module | Pin | ESP32 |
-|----------------------|
+|--------|-----|-------|
 | OLED   | VCC | 3V3   |
 | OLED   | GND | GND   |
 | SHT31  | VIN | 3V3   |
@@ -39,7 +38,7 @@ An embedded "sensor UI" on an ESP32 that reads temperature and humidity from an 
 
 ### I<sup>2</sup>C (shared bus)
 | Signal | ESP32 GPIO | OLED | SHT31 |
-|------------------------------------|
+|--------|------------|------|-------|
 | SDA    | GPIO21     | SDA  | SDA   |
 | SCL    | GPIO22     | SCL  | SCL   |
 
@@ -48,7 +47,7 @@ An embedded "sensor UI" on an ESP32 that reads temperature and humidity from an 
 - **pressed = LOW** (connects GPIO to GND)
 
 | Button | ESP32 GPIO | Other side |
-|----------------------------------|
+|--------|------------|------------|
 | BTN32  | GPIO32     | GND        |
 | BTN33  | GPIO33     | GND        |
 
